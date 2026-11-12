@@ -48,6 +48,24 @@ class CodeAgent(Agent):
 
         # TODO(1.1.b): Construct the system prompt and task_prompt. These
         # should be usable by the `Agent.build_prompt` method.
+        info = json.dumps(
+            {
+                "machine": self.env.machine,
+                "release": self.env.release,
+                "system": self.env.system,
+                "version": self.env.version,
+            },
+            indent=2,
+        )
+        self.system_prompt = (
+            "You are a coding agent working in a terminal sandbox. "
+            "Use the execute tool to inspect the repository and change files. "
+            "Each command runs in a new subshell, so set cwd and env instead of "
+            "relying on cd or export. Prefer commands that produce little output. "
+            "When the task is complete, call send_message with a short summary.\n"
+            f"<system_information>\n{info}\n</system_information>"
+        )
+        self.task_prompt = self.task
         # TODO(1.4): If any skills are available to the agent, make their
         # descriptions/metadata available to the agent in the prompt.
 
