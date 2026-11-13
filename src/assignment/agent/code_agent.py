@@ -70,6 +70,13 @@ class CodeAgent(Agent):
         self.task_prompt = self.task
         # TODO(1.4): If any skills are available to the agent, make their
         # descriptions/metadata available to the agent in the prompt.
+        if self.skills:
+            catalog = "\n".join(skill["metadata"] for skill in self.skills.values())
+            self.system_prompt += (
+                "\n\nReusable skills are available. Call `invoke_skill` with a "
+                "skill's name to load its instructions, and follow them in place "
+                f"of your default approach.\n\n<skills>\n{catalog}\n</skills>\n"
+            )
 
     def execute_tool_calls(
         self, tool_calls: list[dict[str, Any]]
@@ -128,10 +135,27 @@ class CodeAgent(Agent):
                         content = "Error: 'send_message' requires a 'summary' string."
                     else:
                         content = summary
+                elif name == "invoke_skill" and self.skills:
+                    skill_name = arguments.get("name")
+                    skill = (
+                        self.skills.get(skill_name)
+                        if isinstance(skill_name, str)
+                        else None
+                    )
+                    if skill is None:
+                        available = ", ".join(sorted(self.skills)) or "(none)"
+                        content = (
+                            f"Error: unknown skill {skill_name!r}. "
+                            f"Available skills: {available}."
+                        )
+                    else:
+                        content = skill["content"]
                 else:
+                    available = ", ".join(
+                        tool["function"]["name"] for tool in self.tools
+                    )
                     content = (
-                        f"Error: unknown tool {name!r}. "
-                        "Available tools: execute, send_message."
+                        f"Error: unknown tool {name!r}. Available tools: {available}."
                     )
 
             observations.append(

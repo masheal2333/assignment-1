@@ -16,6 +16,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from openai import OpenAI
+import yaml
 
 from assignment.env import Environment
 from assignment.agent.tools import INVOKE_SKILL_TOOL
@@ -165,7 +166,49 @@ class Agent:
         # ``content`` of the skill file for ``invoke_skill``. Reject duplicate
         # names and malformed or missing frontmatter with a clear
         # ``ValueError``.
-        raise NotImplementedError
+        if not skills_path.is_dir():
+            raise ValueError(f"Skills path {skills_path} is not a directory.")
+
+        skills: dict[str, dict[str, str]] = {}
+        for child in sorted(skills_path.iterdir()):
+            if not child.is_dir():
+                continue
+            skill_file = child / "SKILL.md"
+            if not skill_file.is_file():
+                raise ValueError(f"Skill directory {child.name!r} has no SKILL.md.")
+
+            content = skill_file.read_text(encoding="utf-8")
+            lines = content.splitlines()
+            if not lines or lines[0].strip() != "---":
+                raise ValueError(f"{skill_file} is missing YAML frontmatter at the head.")
+            closing = next(
+                (i for i in range(1, len(lines)) if lines[i].strip() == "---"), None
+            )
+            if closing is None:
+                raise ValueError(f"{skill_file} has unterminated YAML frontmatter.")
+            try:
+                frontmatter = yaml.safe_load("\n".join(lines[1:closing]))
+            except yaml.YAMLError as exc:
+                raise ValueError(
+                    f"{skill_file} has malformed YAML frontmatter: {exc}"
+                ) from exc
+            if not isinstance(frontmatter, dict):
+                raise ValueError(f"{skill_file} frontmatter must be a YAML mapping.")
+            name = frontmatter.get("name")
+            description = frontmatter.get("description")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f"{skill_file} frontmatter needs a non-empty 'name'.")
+            if not isinstance(description, str) or not description.strip():
+                raise ValueError(
+                    f"{skill_file} frontmatter needs a non-empty 'description'."
+                )
+            if name in skills:
+                raise ValueError(f"Duplicate skill name {name!r} ({skill_file}).")
+            skills[name] = {
+                "metadata": f"name: {name}\ndescription: {description}",
+                "content": content,
+            }
+        return skills
 
     def query_language_model(self) -> dict[str, Any]:
         """Send one tool-enabled Chat Completions request and normalize it."""
