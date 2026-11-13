@@ -9,6 +9,7 @@ from assignment.agent.base import (
     DEFAULT_COMPACTION_KEEP_RECENT_STEPS,
     DEFAULT_COMPACTION_MAX_TOKENS,
     Agent,
+    format_tool_output,
 )
 from assignment.agent.tools import EXECUTE_TOOL, SEND_MESSAGE_TOOL
 from assignment.env import Environment
@@ -45,6 +46,7 @@ class CodeAgent(Agent):
 
         # TODO(Part 1.3): Make the `execute` and `send_message` tools available
         # to the agent.
+        self.tools.extend([EXECUTE_TOOL, SEND_MESSAGE_TOOL])
 
         # TODO(1.1.b): Construct the system prompt and task_prompt. These
         # should be usable by the `Agent.build_prompt` method.
@@ -78,4 +80,61 @@ class CodeAgent(Agent):
         # one message per call (there may be multiple tool calls in one agent
         # response!). Malformed JSON and unknown tools must become recoverable
         # observations relayed to the agent instead of exceptions.
-        raise NotImplementedError
+        observations: list[dict[str, str]] = []
+        for call in tool_calls:
+            # Link each observation to the call it answers; IDs may repeat
+            # across the trajectory, so match within this action only.
+            call_id = call.get("id", "") if isinstance(call, dict) else ""
+            function = (call.get("function") or {}) if isinstance(call, dict) else {}
+            name = function.get("name")
+            raw_arguments = function.get("arguments") or ""
+
+            try:
+                arguments = json.loads(raw_arguments) if raw_arguments else {}
+            except (json.JSONDecodeError, TypeError):
+                content = (
+                    "Error: tool arguments are not valid JSON. Received "
+                    f"{raw_arguments!r}. Resend the call with a valid JSON object."
+                )
+            else:
+                if not isinstance(arguments, dict):
+                    content = "Error: tool arguments must be a JSON object."
+                elif name == "execute":
+                    command = arguments.get("command")
+                    if not isinstance(command, (str, list)):
+                        content = (
+                            "Error: 'execute' requires a 'command' string or argv list."
+                        )
+                    else:
+                        # Optional parameters keep Environment.execute's defaults
+                        # (None) unless the agent overrides them in the call.
+                        result = self.env.execute(
+                            command,
+                            shell=arguments.get("shell"),
+                            cwd=arguments.get("cwd"),
+                            timeout=arguments.get("timeout"),
+                            env=arguments.get("env"),
+                        )
+                        observation = {
+                            "output": result.get("output", ""),
+                            "returncode": result.get("returncode", -1),
+                        }
+                        if result.get("exception_info"):
+                            observation["exception_info"] = result["exception_info"]
+                        content = format_tool_output(observation)
+                elif name == "send_message":
+                    summary = arguments.get("summary")
+                    if not isinstance(summary, str):
+                        content = "Error: 'send_message' requires a 'summary' string."
+                    else:
+                        content = summary
+                else:
+                    content = (
+                        f"Error: unknown tool {name!r}. "
+                        "Available tools: execute, send_message."
+                    )
+
+            observations.append(
+                {"role": "tool", "tool_call_id": call_id, "content": content}
+            )
+        return observations
