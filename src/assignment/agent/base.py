@@ -31,7 +31,25 @@ MAX_OBSERVATION_CHARS = 10_000
 # TODO(Part 2): Write instructions that make the model produce concise working
 # memory for a software agent. The prompt should preserve concrete progress,
 # failures, test results, constraints, and next steps without copying raw output.
-COMPACTION_SYSTEM_PROMPT = ""
+COMPACTION_SYSTEM_PROMPT = """You maintain the working memory of a software agent that is partway through a coding task. You are given the task specification and the transcript of the work so far. Rewrite that transcript as concise, factual working memory the agent can resume from.
+
+Preserve, whenever the transcript establishes them:
+- Objective: the issue being fixed, and what a correct fix has to do.
+- Constraints: build and test commands, environment specifics, file locations, and anything the agent was told not to touch.
+- Files: paths read or edited, and why each matters.
+- Commands and edits: what was run or changed, and in which file, in enough detail to repeat or undo it.
+- Concrete results: exact error messages, failing test names, exit codes, and other observed facts. Keep identifiers, paths, and numbers verbatim.
+- Failed approaches: what was tried and why it did not work, so it is not retried blindly.
+- Tests: what was run, what passes, what still fails.
+- Blockers: open questions, missing information, or broken state.
+- Next action: the single most useful next step, if the transcript points to one.
+
+Rules:
+- Write plain text as short bullets or labeled lines. No preamble, no closing question, no request for more information.
+- Do not copy raw output wholesale. Quote only the short excerpt that carries the fact: an error line, a test name, a diff hunk.
+- Do not invent progress. If the transcript does not establish something, leave it out rather than guessing.
+- Do not mention the transcript, the summarization, or yourself. Write it as the agent's own notes.
+- The memory replaces the transcript, so it must be far shorter than what it stands in for."""
 
 
 class StepLimitError(Exception):
@@ -300,6 +318,43 @@ class Agent:
 
         return self.compact_threshold_tokens is not None
 
+    def working_memory_message(self, summary: str) -> dict[str, str]:
+        """The history message that carries model-generated working memory.
+
+        Compaction stores it at the head of `history`, so the unchanged
+        `build_prompt` emits it in place of the messages it replaced.
+        """
+
+        return {
+            "role": "user",
+            "content": (
+                "<working_memory>\n"
+                f"{summary}\n"
+                "</working_memory>\n"
+                "The working memory above stands in for earlier turns. The "
+                "messages that follow are the most recent steps, kept "
+                "verbatim."
+            ),
+        }
+
+    def recent_step_start(self) -> int:
+        """Index in `history` where the steps kept verbatim begin.
+
+        The boundary falls on an assistant message, so the retained steps keep
+        their tool observations, which follow their call and stay linked to it
+        by `tool_call_id`.
+        """
+
+        assistant_indices = [
+            index
+            for index, message in enumerate(self.history)
+            if message.get("role") == "assistant"
+        ]
+        keep = self.compaction_keep_recent_steps
+        if len(assistant_indices) <= keep:
+            return 0
+        return assistant_indices[-keep]
+
     def compact_context(self):
         """Replace parts of prompt with model-generated working memory. Changes the
         content that `build_prompt` emits."""
@@ -313,9 +368,34 @@ class Agent:
         # with all linked tool observations. The resulting summary should change
         # what `build_prompt` emits, and reduce the length of the prompt.
 
-        raise NotImplementedError
+        # Only the old prefix is summarized. The retained steps keep their raw
+        # messages so the model still sees the exact commands it ran and the
+        # observations it is about to build on. A previous summary, if any, sits
+        # at the head of `history` and is summarized again along with what
+        # followed it, so nothing summarized once is lost.
+        recent_start = self.recent_step_start()
 
-        compaction_prompt = []
+        prefix: list[dict[str, Any]] = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": self.task_prompt},
+            *self.history[:recent_start],
+        ]
+
+        # The transcript is serialized into one user message instead of being
+        # replayed as chat turns: this request carries no tools, and an
+        # assistant turn at its end would invite a reply rather than a summary.
+        compaction_prompt = [
+            {"role": "system", "content": COMPACTION_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Write the working memory for the transcript below.\n\n"
+                    "<transcript>\n"
+                    f"{json.dumps(prefix, ensure_ascii=False, indent=2)}\n"
+                    "</transcript>"
+                ),
+            },
+        ]
 
         ### Do not modify this section ###
         compaction_response = self.client.chat.completions.create(
@@ -328,6 +408,17 @@ class Agent:
 
         # Use `compaction_response` to update what `build_prompt` emits, but
         # DO NOT modify the object itself. Let the method return it unchanged.
+        summary = (compaction_response.choices[0].message.content or "").strip()
+        if summary:
+            # The summarized messages are replaced by the summary itself, stored
+            # in `history`; `build_prompt` appends the history, so it emits the
+            # working memory without any change of its own. An empty reply
+            # leaves the history untouched, so the next threshold check tries
+            # again instead of losing context for nothing.
+            self.history = [
+                self.working_memory_message(summary),
+                *self.history[recent_start:],
+            ]
 
         ### Do not modify this section ###
         return compaction_prompt, compaction_response.model_dump(mode="json")
