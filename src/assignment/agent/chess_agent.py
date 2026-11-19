@@ -19,6 +19,7 @@ from assignment.agent.chess_tools import (
     CHESS_PORT,
     _run_python,
     _simulate_move,
+    chess_error,
 )
 from assignment.agent.tools import (
     INVOKE_SKILL_TOOL,
@@ -106,7 +107,7 @@ class ChessAgent(Agent):
             compaction_max_tokens=compaction_max_tokens,
         )
 
-        # TODO(Part 3): Register the play_move tool schema from tools.py.
+        self.tools.append(PLAY_MOVE_TOOL)
 
         if programmatic_tools:
             self.tools.append(RUN_PYTHON_TOOL)
@@ -163,18 +164,43 @@ class ChessAgent(Agent):
     ) -> list[dict[str, str]]:
         """Execute model-generated ``play_move`` calls against the chess API."""
 
-        # TODO(Part 3.1):
-        # 1. Dispatch on the function name, and ignore a tool this agent did
-        #    not register.
-        # 2. Hand the raw arguments to the matching chess_tools helper, with
-        #    self.chess_client as its first argument. Each helper takes the
-        #    client explicitly so the same code can run inside the sandbox.
-        # 3. Format a played move with self.format_state, then update
-        #    last_state and finished.
-        # 4. Link every observation to its call with tool_call_id.
-        # 5. Turn malformed, unknown, rejected, or extra parallel calls into
-        #    recoverable <chess_error> observations instead of crashing.
-
         # TODO(Part 3.3-4): add cases for simulate_move and run_python, with
         # linked observations and recoverable errors, just like the old tool.
-        raise NotImplementedError
+        observations: list[dict[str, str]] = []
+        move_attempted = False
+        for call in tool_calls:
+            call_id = call.get("id", "") if isinstance(call, dict) else ""
+            function = (call.get("function") or {}) if isinstance(call, dict) else {}
+            if not isinstance(function, dict):
+                function = {}
+            name = function.get("name")
+            raw_arguments = function.get("arguments")
+
+            if name != "play_move":
+                available = ", ".join(tool["function"]["name"] for tool in self.tools)
+                content = chess_error(
+                    f"Unknown tool {name!r}. Available tools: {available}."
+                )
+            elif move_attempted:
+                content = chess_error(
+                    "Only one play_move attempt is allowed per turn. Read the "
+                    "latest observation and send one move in the next turn."
+                )
+            else:
+                move_attempted = True
+                result = _play_move(self.chess_client, raw_arguments)
+                try:
+                    state = json.loads(result)
+                except (TypeError, ValueError):
+                    state = None
+                if isinstance(state, dict):
+                    self.last_state = state
+                    self.finished = bool(state.get("game_over"))
+                    content = self.format_state(state)
+                else:
+                    content = result
+
+            observations.append(
+                {"role": "tool", "tool_call_id": call_id, "content": content}
+            )
+        return observations
