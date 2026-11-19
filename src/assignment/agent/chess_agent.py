@@ -176,9 +176,6 @@ class ChessAgent(Agent):
         # 4. Link every observation to its call with tool_call_id.
         # 5. Turn malformed, unknown, rejected, or extra parallel calls into
         #    recoverable <chess_error> observations instead of crashing.
-
-        # TODO(Part 3.3-4): add cases for simulate_move and run_python, with
-        # linked observations and recoverable errors, just like the old tool.
         observations: list[dict[str, str]] = []
         move_attempted = False
         for call in tool_calls:
@@ -217,3 +214,6 @@ class ChessAgent(Agent):
                 {"role": "tool", "tool_call_id": call_id, "content": content}
             )
         return observations
+
+    # TODO(Part 3.3-4): add cases for simulate_move and run_python, with
+    # linked observations and recoverable errors, just like the old tool.
