@@ -67,6 +67,12 @@ def _play_move(client: httpx.Client, arguments: str) -> str:
     Takes the raw JSON arguments of one tool call. Returns the new state, or a
     `<chess_error>` observation if the move could not be played.
     """
+    # TODO(3.1.b): Parse the arguments and POST {"move": <uci move>} to
+    # /api/move. Return its JSON object. Catch any errors raised by the
+    # tool and return an error message between `<chess_error></chess_error>`
+    # for the agent to address. Cover malformed JSON arguments, arguments
+    # that are not an object, a missing or non-string fen, a non-string move,
+    # a position or move the server rejects, and a transport failure.
     try:
         parsed = json.loads(arguments)
     except (TypeError, ValueError) as exc:

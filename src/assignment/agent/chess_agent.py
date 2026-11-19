@@ -107,6 +107,7 @@ class ChessAgent(Agent):
             compaction_max_tokens=compaction_max_tokens,
         )
 
+        # TODO(Part 3): Register the play_move tool schema from tools.py.
         self.tools.append(PLAY_MOVE_TOOL)
 
         if programmatic_tools:
@@ -163,6 +164,18 @@ class ChessAgent(Agent):
         self, tool_calls: list[dict[str, Any]]
     ) -> list[dict[str, str]]:
         """Execute model-generated ``play_move`` calls against the chess API."""
+
+        # TODO(Part 3.1):
+        # 1. Dispatch on the function name, and ignore a tool this agent did
+        #    not register.
+        # 2. Hand the raw arguments to the matching chess_tools helper, with
+        #    self.chess_client as its first argument. Each helper takes the
+        #    client explicitly so the same code can run inside the sandbox.
+        # 3. Format a played move with self.format_state, then update
+        #    last_state and finished.
+        # 4. Link every observation to its call with tool_call_id.
+        # 5. Turn malformed, unknown, rejected, or extra parallel calls into
+        #    recoverable <chess_error> observations instead of crashing.
 
         # TODO(Part 3.3-4): add cases for simulate_move and run_python, with
         # linked observations and recoverable errors, just like the old tool.
